@@ -230,9 +230,9 @@ func (m Migrator) ColumnTypes(value interface{}) ([]gorm.ColumnType, error) {
 	columnTypes := make([]gorm.ColumnType, 0)
 	err := m.RunWithValue(value, func(stmt *gorm.Statement) error {
 		var (
-			currentDatabase, table = m.CurrentSchema(stmt, stmt.Table)
+			currentDatabase, table = m.CurrentSchema(stmt, stmt.Schema.Table)
 			columnTypeSQL          = "SELECT column_name, column_default, is_nullable = 'YES', data_type, character_maximum_length, column_type, column_key, extra, column_comment, numeric_precision, numeric_scale "
-			rows, err              = m.DB.Session(&gorm.Session{}).Table(table).Limit(1).Rows()
+			rows, err              = m.DB.Session(&gorm.Session{}).Table(stmt.Schema.Table).Limit(1).Rows()
 		)
 
 		if err != nil {
@@ -341,7 +341,7 @@ func (m Migrator) GetIndexes(value interface{}) ([]gorm.Index, error) {
 	err := m.RunWithValue(value, func(stmt *gorm.Statement) error {
 
 		result := make([]*Index, 0)
-		schema, table := m.CurrentSchema(stmt, stmt.Table)
+		schema, table := m.CurrentSchema(stmt, stmt.Schema.Table)
 		scanErr := m.DB.Table(table).Raw(indexSql, schema, table).Scan(&result).Error
 		if scanErr != nil {
 			return scanErr
@@ -416,7 +416,7 @@ func (m Migrator) TableType(value interface{}) (tableType gorm.TableType, err er
 			values = []interface{}{
 				&table.SchemaValue, &table.NameValue, &table.TypeValue, &table.CommentValue,
 			}
-			currentDatabase, tableName = m.CurrentSchema(stmt, stmt.Table)
+			currentDatabase, tableName = m.CurrentSchema(stmt, stmt.Schema.Table)
 			tableTypeSQL               = "SELECT table_schema, table_name, table_type, table_comment FROM information_schema.tables WHERE table_schema = ? AND table_name = ?"
 		)
 
@@ -430,4 +430,35 @@ func (m Migrator) TableType(value interface{}) (tableType gorm.TableType, err er
 	})
 
 	return table, err
+}
+
+// HasIndex check has index `name` or not
+func (m Migrator) HasIndex(value interface{}, name string) bool {
+	var count int64
+	m.RunWithValue(value, func(stmt *gorm.Statement) error {
+		schema, table := m.CurrentSchema(stmt, stmt.Schema.Table)
+		if idx := stmt.Schema.LookIndex(name); idx != nil {
+			name = idx.Name
+		}
+
+		return m.DB.Raw(
+			"SELECT count(*) FROM information_schema.statistics WHERE table_schema = ? AND table_name = ? AND index_name = ?",
+			schema, table, name,
+		).Row().Scan(&count)
+	})
+
+	return count > 0
+}
+
+// HasTable returns table exists or not for value, value could be a struct or string
+func (m Migrator) HasTable(value interface{}) bool {
+	var count int64
+
+	m.RunWithValue(value, func(stmt *gorm.Statement) error {
+		schema, table := m.CurrentSchema(stmt, stmt.Schema.Table)
+
+		return m.DB.Raw("SELECT count(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ? AND table_type = ?", schema, table, "BASE TABLE").Row().Scan(&count)
+	})
+
+	return count > 0
 }
